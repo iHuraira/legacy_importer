@@ -1,0 +1,8 @@
+.env
+.secrets/
+.gcloud-service-account/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.pytest-*/
+.legacy-import-state/

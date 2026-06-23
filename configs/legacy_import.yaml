@@ -1,0 +1,149 @@
+source: legacy_import
+
+database:
+  env_primary: SEQQUERY_DATABASE_URI
+  env_fallback: AIRFLOW_CONN_POSTGRES
+  component_env:
+    user: SEQQUERY_DATABASE_USER
+    password: SEQQUERY_DATABASE_PASSWORD
+    database: SEQQUERY_DATABASE_NAME
+    host: SEQQUERY_DATABASE_HOST
+    port: SEQQUERY_DATABASE_PORT
+    sslmode: SEQQUERY_DATABASE_SSLMODE
+  legacy_component_env:
+    user: user
+    password: pass
+    database: db
+  default_host: 127.0.0.1
+  default_port: 5432
+  default_sslmode: prefer
+
+gcp:
+  artifact_bucket: phlegethon-dev
+  raw_reads_bucket: phlegethon-dev
+  credentials_file_env: GOOGLE_APPLICATION_CREDENTIALS
+  credentials_json_env: SEQQUERY_GCP_CREDENTIALS
+  credentials_file: .secrets/legacy-importer.json
+  raw_reads_prefix: legacy_import/raw_reads
+
+organizations:
+  mhh:
+    organization_name: MHH
+    organization_code: mhh
+
+legacy_ownership:
+  user_email_template: legacy-import+{organization_code}@local
+  user_display_name_template: Legacy Import User ({organization_code})
+  batch_strategy: by_legacy_batch_code
+  batch_name_template: Legacy Import {organization_code} {legacy_batch_code}
+  job_type: legacy_import
+  run_status: imported
+
+samples:
+  status: imported
+  accession_from: sample_name
+  visibility: private
+
+reads:
+  upload: true
+  status: imported
+
+artifacts:
+  upload: true
+  output_type: tar.gz
+
+tasks:
+  state: COMPLETED
+  source: legacy_import
+  is_synthetic: true
+  tool_version: legacy
+
+mash_ska:
+  enabled: true
+  mash_master_file: all_sketches.msh
+  mash_version: 1
+  mash_is_active: true
+  mash_scope: global
+  batch_sketch_count: null
+  cumulative_sketch_count: null
+  ska_distances_csv: ska_results.csv
+  ska_version: 1
+  checkpoint_dir: .legacy-import-state
+  sample_source:
+    mode: manifest_or_database
+    manifest_csv: data_info.csv
+    source_filter: legacy_import
+  ska_csv_columns:
+    sample1: sample1
+    sample2: sample2
+    snps: SNPs
+    category: null
+  ska_sample_overrides: {}
+  ska_category_thresholds:
+    close_max_snps: 20
+    related_max_snps: 100
+    default_category: unrelated
+
+tools:
+  fastqc:
+    enabled: true
+    category: qc
+    parser_inputs: ["fastqc/*_fastqc.zip"]
+  bbmap:
+    enabled: true
+    category: mapping
+    parser_inputs:
+      - "*_bb_stats.txt"
+      - "*_bb_hist.txt"
+      - "*_ihist.txt"
+      - "logs/bbmap_*.log"
+  bracken:
+    enabled: true
+    category: classification
+    parser_inputs: ["*_bracken.out", "*_kraken_report.txt", "*_kraken_report_bracken.txt"]
+  mlst:
+    enabled: true
+    category: typing
+    parser_inputs: ["*_seemann_mlst_output.txt"]
+  quast:
+    enabled: true
+    category: assembly_qc
+    parser_inputs: ["*_quast_report.tsv"]
+  amrfinder:
+    enabled: true
+    category: amr
+    parser_inputs: ["amrfinder/*_amrfinder_report.tsv", "amrfinder/*_organism.txt"]
+  prokka:
+    enabled: true
+    category: annotation
+    result_table: bakta_annotations
+    parser_inputs: ["prokka/*"]
+    gcp_inputs: ["prokka/*"]
+  mash:
+    enabled: true
+    category: sketch
+    parser_inputs: []
+    gcp_inputs: ["mash_k21_s1000/*.msh"]
+    extractor_enabled: false
+  ska:
+    enabled: true
+    category: sketch
+    parser_inputs: []
+    gcp_inputs: ["ska_k15/*.skf"]
+    extractor_enabled: false
+  export_summary:
+    enabled: true
+    category: summary
+    parser_inputs: []
+    gcp_inputs: []
+    extractor_enabled: false
+
+qc:
+  qc1:
+    enabled: true
+    gate_version: qc_gate_loose_v1
+    thresholds: {}
+  qc2:
+    enabled: true
+    gate_version: qc2_rules_v1
+    thresholds: {}

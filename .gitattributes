@@ -1,0 +1,2 @@
+all_sketches.msh filter=lfs diff=lfs merge=lfs -text
+ska_results.csv filter=lfs diff=lfs merge=lfs -text
