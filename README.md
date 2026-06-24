@@ -94,14 +94,15 @@ Inventory never contacts PostgreSQL or GCS. Dry run validates the database
 schema, computes identifiers, and reports planned writes and uploads without
 performing them.
 
-The finalized CSV manifest has five columns:
+The finalized CSV manifest has six columns:
 
 ```csv
-sample_name,full_path,organization_code,legacy_batch_code,visibility
+sample_name,full_path,organization_code,organization_name,legacy_batch_code,visibility
 ```
 
 `visibility` must be either `public` or `private`; when omitted, it defaults to
-`private`. `level_2` is intentionally ignored.
+`private`. `organization_name` is optional for older manifests and falls back
+to the configured organization mapping. `level_2` is intentionally ignored.
 
 ## Import
 

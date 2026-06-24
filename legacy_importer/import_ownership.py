@@ -31,7 +31,9 @@ def ownership_rows(row: ManifestRow, config: ImportConfig, now: datetime | None 
     return {
         "organizations": {
             "organization_id": organization,
-            "organization_name": config.organization_name(organization_code),
+            "organization_name": (
+                row.organization_name or config.organization_name(organization_code)
+            ),
             "organization_code": organization_code,
             "created_at": now,
             **config.organization_auth(organization_code),

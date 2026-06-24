@@ -28,10 +28,16 @@ gcp:
 
 organizations:
   mhh:
-    organization_name: MHH
+    organization_name: Medizinische Hochschule Hannover
     organization_code: mhh
     # auth_id: optional-keycloak-auth-id
     # auth_name: optional-keycloak-client-id
+  braunschweig:
+    organization_name: Klinikum Braunschweig
+    organization_code: braunschweig
+  copenhagen:
+    organization_name: Rigshospitalet Kopenhagen
+    organization_code: copenhagen
 
 legacy_ownership:
   user_email_template: legacy-import+{organization_code}@local

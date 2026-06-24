@@ -8,12 +8,17 @@ def test_ownership_uses_finalized_manifest_fields_and_visibility():
         sample_name="S1",
         full_path="/data/S1",
         organization_code="mhh",
+        organization_name="Medizinische Hochschule Hannover",
         legacy_batch_code="B1",
         visibility="public",
     )
     rows = ownership_rows(row, load_config("configs/legacy_import.yaml"))
 
     assert rows["organizations"]["organization_code"] == "mhh"
+    assert (
+        rows["organizations"]["organization_name"]
+        == "Medizinische Hochschule Hannover"
+    )
     assert rows["batches"]["batch_accession"] == "legacy-mhh-B1"
     assert rows["batches"]["finished_at"] is not None
     assert rows["runs"]["run_accession"] == "legacy-mhh-B1"
@@ -37,3 +42,19 @@ def test_organization_auth_fields_are_included_only_when_configured():
 
     assert organization["auth_id"] == "auth-id"
     assert organization["auth_name"] == "keycloak-client"
+
+
+def test_organization_name_falls_back_to_config_for_old_manifests():
+    row = ManifestRow(
+        sample_name="S1",
+        full_path="/data/S1",
+        organization_code="braunschweig",
+        legacy_batch_code="B1",
+    )
+
+    organization = ownership_rows(
+        row,
+        load_config("configs/legacy_import.yaml"),
+    )["organizations"]
+
+    assert organization["organization_name"] == "Klinikum Braunschweig"
