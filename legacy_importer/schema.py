@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 CORE_SCHEMA: dict[str, set[str]] = {
-    "organizations": {"organization_id", "organization_name", "organization_code", "created_at"},
+    "organizations": {
+        "organization_id", "organization_name", "organization_code",
+        "auth_id", "auth_name", "created_at",
+    },
     "users": {"user_id", "organization_id", "email", "display_name", "role"},
-    "batches": {"batch_id", "organization_id", "batch_accession", "user_id", "batch_name", "status"},
+    "batches": {
+        "batch_id", "organization_id", "batch_accession", "user_id",
+        "batch_name", "status", "finished_at",
+    },
     "jobs": {"job_id", "user_id", "batch_id", "job_type", "status", "attempt"},
     "runs": {"run_id", "run_accession", "batch_id", "job_id", "status"},
     "samples": {
@@ -18,11 +24,12 @@ CORE_SCHEMA: dict[str, set[str]] = {
     },
     "tasks": {
         "task_id", "task_accession", "run_id", "sample_id", "tool_name",
-        "tool_version", "state", "source", "is_synthetic",
+        "tool_version", "state", "source", "is_synthetic", "organization_id",
     },
     "artifacts": {
         "artifact_id", "task_id", "sample_id", "artifact_name", "category",
         "output_type", "uri", "size_bytes", "checksum", "metadata", "source",
+        "organization_id",
     },
     "mash_master": {
         "mash_master_id", "task_id", "batch_id", "artifact_id", "version",

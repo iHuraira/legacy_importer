@@ -30,6 +30,8 @@ organizations:
   mhh:
     organization_name: MHH
     organization_code: mhh
+    # auth_id: optional-keycloak-auth-id
+    # auth_name: optional-keycloak-client-id
 
 legacy_ownership:
   user_email_template: legacy-import+{organization_code}@local

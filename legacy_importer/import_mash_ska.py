@@ -110,6 +110,7 @@ def global_context_rows(
             "status": "imported",
             "source": config.source,
             "created_at": now,
+            "finished_at": now,
         },
         "jobs": {
             "job_id": job_id,
@@ -212,6 +213,7 @@ def synthetic_batch_task(
         "task_accession": f"legacy-{tool_name}-{version}-{batch_id}",
         "run_id": run_id,
         "sample_id": None,
+        "organization_id": None,
         "tool_name": tool_name,
         "tool_version": "legacy",
         "state": "COMPLETED",
@@ -430,11 +432,11 @@ def import_mash_master(
         {
             "organizations": {"organization_id", "organization_code"},
             "users": {"user_id", "organization_id"},
-            "batches": {"batch_id", "batch_accession", "user_id"},
+            "batches": {"batch_id", "batch_accession", "user_id", "finished_at"},
             "jobs": {"job_id", "batch_id", "user_id"},
             "runs": {"run_id", "run_accession", "batch_id", "job_id"},
-            "tasks": {"task_id", "run_id", "tool_name"},
-            "artifacts": {"artifact_id", "task_id", "uri"},
+            "tasks": {"task_id", "run_id", "tool_name", "organization_id"},
+            "artifacts": {"artifact_id", "task_id", "uri", "organization_id"},
             "mash_master": {"mash_master_id", "task_id", "batch_id", "artifact_id"},
             "mash_master_samples": {
                 "mash_master_id", "sample_id", "organization_id", "added_at"
@@ -480,6 +482,7 @@ def import_mash_master(
                 "artifact_id": artifact_id,
                 "task_id": task["task_id"],
                 "sample_id": None,
+                "organization_id": None,
                 "artifact_name": "mash_master",
                 "category": "distance",
                 "output_type": "tar.gz",
@@ -753,10 +756,10 @@ def import_ska_distances(
         {
             "organizations": {"organization_id", "organization_code"},
             "users": {"user_id", "organization_id"},
-            "batches": {"batch_id", "batch_accession", "user_id"},
+            "batches": {"batch_id", "batch_accession", "user_id", "finished_at"},
             "jobs": {"job_id", "batch_id", "user_id"},
             "runs": {"run_id", "run_accession", "batch_id", "job_id"},
-            "tasks": {"task_id", "run_id", "tool_name"},
+            "tasks": {"task_id", "run_id", "tool_name", "organization_id"},
             "ska_master": {"ska_master_id", "task_id", "batch_id", "sample_count"},
             "ska_distance": {
                 "ska_distance_id", "ska_master_id", "sample1_id", "sample2_id",

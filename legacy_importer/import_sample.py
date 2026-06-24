@@ -47,6 +47,7 @@ def import_sample(
 
     with transaction(connection):
         import_ownership(connection, ownership)
+        organization_id = ownership["samples"]["organization_id"]
         reads = {}
         if not skip_reads:
             reads = import_reads(
@@ -75,15 +76,21 @@ def import_sample(
                 continue
             if skip_artifacts or not gcp_paths:
                 task = task_row(
-                    config, run_id, sample_id, tool_name, datetime.now(timezone.utc)
+                    config,
+                    run_id,
+                    sample_id,
+                    organization_id,
+                    tool_name,
+                    datetime.now(timezone.utc),
                 )
                 upsert(connection, "tasks", task, ["task_id"])
                 artifact = None
                 archive = None
             else:
                 task, artifact, archive = import_artifact(
-                    connection, gcs_client, config, inventory.sample_dir, run_id, sample_id,
-                    tool_name, gcp_paths, upload=config.artifacts.get("upload", True),
+                    connection, gcs_client, config, inventory.sample_dir, run_id,
+                    sample_id, organization_id, tool_name, gcp_paths,
+                    upload=config.artifacts.get("upload", True),
                 )
             tool_report = {
                 "artifact_uri": artifact["uri"] if artifact else None,
@@ -150,6 +157,7 @@ def import_sample(
                     config,
                     run_id,
                     sample_id,
+                    organization_id,
                     "export_summary",
                     datetime.now(timezone.utc),
                 )
@@ -165,6 +173,7 @@ def import_sample(
                     config,
                     run_id,
                     sample_id,
+                    organization_id,
                     row.sample_name,
                     build_summary_row(
                         ownership["samples"],

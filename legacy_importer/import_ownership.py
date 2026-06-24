@@ -34,6 +34,7 @@ def ownership_rows(row: ManifestRow, config: ImportConfig, now: datetime | None 
             "organization_name": config.organization_name(organization_code),
             "organization_code": organization_code,
             "created_at": now,
+            **config.organization_auth(organization_code),
         },
         "users": {
             "user_id": user,
@@ -52,6 +53,7 @@ def ownership_rows(row: ManifestRow, config: ImportConfig, now: datetime | None 
                 legacy_batch_code=legacy_batch_code,
             ),
             "status": "imported",
+            "finished_at": now,
         },
         "jobs": {
             "job_id": job,

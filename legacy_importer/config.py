@@ -119,7 +119,7 @@ class ImportConfig(BaseModel):
     source: str = "legacy_import"
     database: DatabaseConfig
     gcp: GCPConfig
-    organizations: dict[str, dict[str, str]] = Field(default_factory=dict)
+    organizations: dict[str, dict[str, str | None]] = Field(default_factory=dict)
     legacy_ownership: dict[str, Any]
     samples: SamplesConfig
     reads: dict[str, Any]
@@ -161,7 +161,17 @@ class ImportConfig(BaseModel):
         )
 
     def organization_name(self, code: str) -> str:
-        return self.organizations.get(code, {}).get("organization_name", code)
+        return self.organizations.get(code, {}).get("organization_name") or code
+
+    def organization_auth(self, code: str) -> dict[str, str]:
+        """Return configured non-empty Keycloak organization identifiers."""
+
+        organization = self.organizations.get(code, {})
+        return {
+            key: value
+            for key in ("auth_id", "auth_name")
+            if (value := organization.get(key))
+        }
 
     def credentials_file(self) -> Path | None:
         """Resolve an optional configured credential path relative to the repo root."""

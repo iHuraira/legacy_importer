@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import typer
@@ -90,6 +92,14 @@ def _protect_source_paths(output: Path, rows: list[ManifestRow]) -> None:
                 f"Refusing to write generated output inside source data: "
                 f"{resolved_output}"
             )
+
+
+def _append_failure_report(path: Path, failure: dict[str, Any]) -> None:
+    """Append one durable JSON failure record for later review."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(failure, default=str) + "\n")
 
 
 @app.command("test-db")
@@ -284,12 +294,18 @@ def import_command(
     skip_extractors: bool = False,
     skip_qc: bool = False,
     progress: bool = typer.Option(True, "--progress/--no-progress"),
+    failure_report: Path = typer.Option(
+        Path(".legacy-import-state/sample_failures.jsonl"),
+        "--failure-report",
+        help="Append durable per-sample errors to this JSONL file.",
+    ),
 ) -> None:
     """Import selected samples and emit a readable per-sample failure report."""
 
     configure_logging()
     settings = load_config(config)
     rows = _rows(csv_path, organization, sample_name, limit)
+    _protect_source_paths(failure_report, rows)
     connection = connect(settings)
     reports, failures = [], []
     reporter = _TerminalProgress(progress)
@@ -297,28 +313,54 @@ def import_command(
         reporter("Samples: uploading", 0, len(rows))
     try:
         for row_number, row in enumerate(rows, 1):
+            started = perf_counter()
             sample_identifier = ids.sample_id(
                 row.organization_code,
                 row.legacy_batch_code,
                 row.sample_name,
             )
             if (skip_existing or resume) and _sample_exists(connection, sample_identifier):
-                reports.append({"sample": row.sample_name, "status": "skipped_existing"})
+                elapsed = perf_counter() - started
+                reports.append({
+                    "sample": row.sample_name,
+                    "status": "skipped_existing",
+                    "elapsed_seconds": round(elapsed, 3),
+                })
                 reporter("Samples: uploading", row_number, len(rows))
+                reporter.close()
+                typer.echo(f"{row.sample_name}: skipped existing ({elapsed:.1f}s)")
                 continue
             try:
                 report = import_sample(
                     connection, settings, row, skip_reads=skip_reads,
                     skip_artifacts=skip_artifacts, skip_extractors=skip_extractors, skip_qc=skip_qc,
                 )
-                reports.append({"status": "imported", **report})
+                elapsed = perf_counter() - started
+                reports.append({
+                    "status": "imported",
+                    "elapsed_seconds": round(elapsed, 3),
+                    **report,
+                })
                 reporter("Samples: uploading", row_number, len(rows))
+                reporter.close()
+                typer.echo(f"{row.sample_name}: imported in {elapsed:.1f}s")
             except Exception as exc:
                 connection.rollback()
-                failure = {"sample": row.sample_name, "error": safe_error(exc)}
+                elapsed = perf_counter() - started
+                failure = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "sample": row.sample_name,
+                    "organization_code": row.organization_code,
+                    "legacy_batch_code": row.legacy_batch_code,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "error": safe_error(exc),
+                }
                 failures.append(failure)
+                _append_failure_report(failure_report, failure)
                 LOG.error("Sample %s failed: %s", row.sample_name, failure["error"])
                 reporter("Samples: uploading", row_number, len(rows))
+                reporter.close()
+                typer.echo(f"{row.sample_name}: failed after {elapsed:.1f}s")
                 if not resume:
                     break
     finally:

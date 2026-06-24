@@ -58,6 +58,7 @@ def test_global_context_uses_deterministic_ids_and_accessions():
     assert rows["batches"]["batch_accession"] == "LEGACY-GLOBAL-BATCH"
     assert rows["batches"]["batch_name"] == "Legacy Global Import"
     assert rows["batches"]["source"] == "legacy_import"
+    assert rows["batches"]["finished_at"] is not None
     assert rows["runs"]["run_id"] == ids.global_run_id(ids.global_batch_id())
     assert rows["runs"]["run_accession"] == "LEGACY-GLOBAL-RUN"
     assert rows["runs"]["source"] == "legacy_import"

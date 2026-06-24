@@ -116,6 +116,10 @@ default: committed samples are skipped and failures are reported while later
 samples continue. Use `--no-resume` to stop after the first failure, and
 `--no-progress` for automation or non-interactive logs.
 
+After each sample, the importer prints the sample name and total elapsed import
+time. This includes local hashing/archive work, GCS uploads, extraction, QC,
+and database writes.
+
 ## Legacy global MASH and SKA
 
 The importer registers the existing merged MASH master and imports the
@@ -181,6 +185,30 @@ If the process stops:
 - SKA commits in batches and stores its last committed CSV row under
   `.legacy-import-state/`. Restarting continues from that row. The checkpoint
   is removed after successful completion.
+
+Sample failures are appended immediately to:
+
+```text
+.legacy-import-state/sample_failures.jsonl
+```
+
+Each line includes the timestamp, sample, organization, batch, elapsed time,
+and sanitized error. Override the location with `--failure-report PATH`.
+Failures do not stop later samples while resume mode is enabled.
+
+## Database migration 13
+
+New imports populate the extended pipeline ownership fields:
+
+- `organizations.auth_id` and `organizations.auth_name` are populated when
+  configured under the matching organization in `configs/legacy_import.yaml`.
+  They are omitted when not configured, so existing Keycloak values are not
+  overwritten with null values.
+- `batches.finished_at` is set for imported historical batches.
+- Sample `tasks.organization_id` and `artifacts.organization_id` use the
+  sample's database organization.
+- Global MASH/SKA tasks and the global MASH artifact use
+  `organization_id = NULL`, consistent with their global scope.
 
 ## Source data safety
 

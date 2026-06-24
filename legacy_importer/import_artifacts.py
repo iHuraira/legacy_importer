@@ -14,7 +14,14 @@ from .gcs import upload_file
 from .ids import artifact_id, task_id
 
 
-def task_row(config: ImportConfig, run_id: UUID, sample_id: UUID, tool_name: str, now: datetime) -> dict[str, Any]:
+def task_row(
+    config: ImportConfig,
+    run_id: UUID,
+    sample_id: UUID,
+    organization_id: UUID,
+    tool_name: str,
+    now: datetime,
+) -> dict[str, Any]:
     """Build one deterministic synthetic task per sample and tool."""
 
     identifier = task_id(sample_id, tool_name)
@@ -23,6 +30,7 @@ def task_row(config: ImportConfig, run_id: UUID, sample_id: UUID, tool_name: str
         "task_accession": f"legacy-{tool_name}-{sample_id}",
         "run_id": run_id,
         "sample_id": sample_id,
+        "organization_id": organization_id,
         "tool_name": tool_name,
         "tool_version": config.tasks.get("tool_version", "legacy"),
         "state": config.tasks.get("state", "COMPLETED"),
@@ -40,6 +48,7 @@ def import_artifact(
     sample_dir: Path,
     run_id: UUID,
     sample_id: UUID,
+    organization_id: UUID,
     tool_name: str,
     paths: list[Path],
     upload: bool = True,
@@ -47,7 +56,14 @@ def import_artifact(
     """Create task, archive and upload outputs, then register the final artifact."""
 
     now = datetime.now(timezone.utc)
-    task = task_row(config, run_id, sample_id, tool_name, now)
+    task = task_row(
+        config,
+        run_id,
+        sample_id,
+        organization_id,
+        tool_name,
+        now,
+    )
     upsert(connection, "tasks", task, ["task_id"])
     identifier = artifact_id(sample_id, tool_name, "output")
     archive = create_archive(sample_dir, paths, identifier)
@@ -66,6 +82,7 @@ def import_artifact(
         "artifact_id": identifier,
         "task_id": task["task_id"],
         "sample_id": sample_id,
+        "organization_id": organization_id,
         "artifact_name": tool_name,
         "category": config.tools[tool_name].category,
         "output_type": config.artifacts.get("output_type", "tar.gz"),
