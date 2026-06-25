@@ -4,7 +4,12 @@ import pytest
 
 import json
 
-from legacy_importer.cli import _append_failure_report, _protect_source_paths
+from legacy_importer.cli import (
+    _append_failure_report,
+    _import_one_sample,
+    _protect_source_paths,
+)
+from legacy_importer.config import load_config
 from legacy_importer.manifest import ManifestRow
 
 
@@ -46,3 +51,53 @@ def test_failure_report_is_appended_as_json_lines(tmp_path: Path):
         for line in report.read_text(encoding="utf-8").splitlines()
     ]
     assert [row["sample"] for row in rows] == ["S1", "S2"]
+
+
+def test_sample_import_reconnects_after_transient_database_error(monkeypatch):
+    connections = [object(), object()]
+    calls = []
+    row = ManifestRow(
+        sample_name="S1",
+        full_path="/data/S1",
+        organization_code="mhh",
+        legacy_batch_code="B1",
+    )
+
+    monkeypatch.setattr(
+        "legacy_importer.cli.connect",
+        lambda _settings: connections.pop(0),
+    )
+    monkeypatch.setattr("legacy_importer.cli.safe_rollback", lambda connection: None)
+    monkeypatch.setattr(
+        "legacy_importer.cli.safe_close",
+        lambda connection: calls.append(("close", connection)),
+    )
+    monkeypatch.setattr("legacy_importer.cli.sleep", lambda _seconds: None)
+
+    def fake_import(connection, *_args, **_kwargs):
+        calls.append(("import", connection))
+        if len([call for call in calls if call[0] == "import"]) == 1:
+            import psycopg2
+
+            raise psycopg2.InterfaceError("connection already closed")
+        return {"sample": "S1"}
+
+    monkeypatch.setattr("legacy_importer.cli.import_sample", fake_import)
+
+    status, report, attempts = _import_one_sample(
+        load_config("configs/legacy_import.yaml"),
+        row,
+        "sample-id",
+        skip_existing=False,
+        skip_reads=False,
+        skip_artifacts=False,
+        skip_extractors=False,
+        skip_qc=False,
+        database_retries=2,
+        retry_base_seconds=0,
+    )
+
+    assert status == "imported"
+    assert report == {"sample": "S1"}
+    assert attempts == 2
+    assert len([call for call in calls if call[0] == "close"]) == 2

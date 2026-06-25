@@ -9,6 +9,7 @@ from psycopg2 import sql
 
 from .config import ImportConfig
 from .gcs import client_from_config, object_exists
+from .db import safe_rollback
 from .schema import table_columns
 
 
@@ -63,7 +64,7 @@ def verify_sample(connection, config: ImportConfig, identifiers: dict[str, Any])
         try:
             result_counts[table] = _count(connection, table, "sample_id", sample_id)
         except Exception:
-            connection.rollback()
+            safe_rollback(connection)
             result_counts[table] = None
     gcs_client = client_from_config(config)
     uris = _uris(connection, "reads", sample_id) + _uris(connection, "artifacts", sample_id)

@@ -7,14 +7,20 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 import typer
 
 from . import ids
 from .config import ImportConfig, load_config
-from .db import connect, test_database
+from .db import (
+    connect,
+    is_transient_connection_error,
+    safe_close,
+    safe_rollback,
+    test_database,
+)
 from .discovery import discover_gcp_inputs, discover_sample
 from .gcs import test_gcp
 from .import_ownership import ownership_rows
@@ -280,6 +286,57 @@ def _sample_exists(connection, sample_id) -> bool:
         return cursor.fetchone() is not None
 
 
+def _import_one_sample(
+    settings: ImportConfig,
+    row: ManifestRow,
+    sample_identifier,
+    *,
+    skip_existing: bool,
+    skip_reads: bool,
+    skip_artifacts: bool,
+    skip_extractors: bool,
+    skip_qc: bool,
+    database_retries: int,
+    retry_base_seconds: float,
+) -> tuple[str, dict[str, Any], int]:
+    """Import one sample using a fresh connection and retry dropped sessions."""
+
+    attempts = database_retries + 1
+    for attempt in range(1, attempts + 1):
+        connection = None
+        try:
+            connection = connect(settings)
+            if skip_existing and _sample_exists(connection, sample_identifier):
+                return "skipped_existing", {"sample": row.sample_name}, attempt
+            report = import_sample(
+                connection,
+                settings,
+                row,
+                skip_reads=skip_reads,
+                skip_artifacts=skip_artifacts,
+                skip_extractors=skip_extractors,
+                skip_qc=skip_qc,
+            )
+            return "imported", report, attempt
+        except Exception as exc:
+            safe_rollback(connection)
+            if not is_transient_connection_error(exc) or attempt >= attempts:
+                raise
+            delay = retry_base_seconds * (2 ** (attempt - 1))
+            LOG.warning(
+                "Database connection lost for sample %s; retrying attempt %d/%d "
+                "in %.1fs.",
+                row.sample_name,
+                attempt + 1,
+                attempts,
+                delay,
+            )
+            sleep(delay)
+        finally:
+            safe_close(connection)
+    raise RuntimeError("unreachable")
+
+
 @app.command("import")
 def import_command(
     csv_path: Path = typer.Option(..., "--csv", exists=True),
@@ -294,6 +351,18 @@ def import_command(
     skip_extractors: bool = False,
     skip_qc: bool = False,
     progress: bool = typer.Option(True, "--progress/--no-progress"),
+    database_retries: int = typer.Option(
+        3,
+        "--database-retries",
+        min=0,
+        help="Retries per sample after transient PostgreSQL connection failures.",
+    ),
+    retry_base_seconds: float = typer.Option(
+        2.0,
+        "--retry-base-seconds",
+        min=0.0,
+        help="Initial database retry delay; subsequent delays double.",
+    ),
     failure_report: Path = typer.Option(
         Path(".legacy-import-state/sample_failures.jsonl"),
         "--failure-report",
@@ -306,7 +375,6 @@ def import_command(
     settings = load_config(config)
     rows = _rows(csv_path, organization, sample_name, limit)
     _protect_source_paths(failure_report, rows)
-    connection = connect(settings)
     reports, failures = [], []
     reporter = _TerminalProgress(progress)
     if rows:
@@ -319,33 +387,36 @@ def import_command(
                 row.legacy_batch_code,
                 row.sample_name,
             )
-            if (skip_existing or resume) and _sample_exists(connection, sample_identifier):
-                elapsed = perf_counter() - started
-                reports.append({
-                    "sample": row.sample_name,
-                    "status": "skipped_existing",
-                    "elapsed_seconds": round(elapsed, 3),
-                })
-                reporter("Samples: uploading", row_number, len(rows))
-                reporter.close()
-                typer.echo(f"{row.sample_name}: skipped existing ({elapsed:.1f}s)")
-                continue
             try:
-                report = import_sample(
-                    connection, settings, row, skip_reads=skip_reads,
-                    skip_artifacts=skip_artifacts, skip_extractors=skip_extractors, skip_qc=skip_qc,
+                status, report, attempts = _import_one_sample(
+                    settings,
+                    row,
+                    sample_identifier,
+                    skip_existing=(skip_existing or resume),
+                    skip_reads=skip_reads,
+                    skip_artifacts=skip_artifacts,
+                    skip_extractors=skip_extractors,
+                    skip_qc=skip_qc,
+                    database_retries=database_retries,
+                    retry_base_seconds=retry_base_seconds,
                 )
                 elapsed = perf_counter() - started
                 reports.append({
-                    "status": "imported",
+                    "status": status,
                     "elapsed_seconds": round(elapsed, 3),
+                    "database_attempts": attempts,
                     **report,
                 })
                 reporter("Samples: uploading", row_number, len(rows))
                 reporter.close()
-                typer.echo(f"{row.sample_name}: imported in {elapsed:.1f}s")
+                if status == "skipped_existing":
+                    typer.echo(f"{row.sample_name}: skipped existing ({elapsed:.1f}s)")
+                else:
+                    typer.echo(
+                        f"{row.sample_name}: imported in {elapsed:.1f}s "
+                        f"(database attempts: {attempts})"
+                    )
             except Exception as exc:
-                connection.rollback()
                 elapsed = perf_counter() - started
                 failure = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -364,7 +435,6 @@ def import_command(
                 if not resume:
                     break
     finally:
-        connection.close()
         reporter.close()
     _print({"imported": reports, "failures": failures})
     if failures:

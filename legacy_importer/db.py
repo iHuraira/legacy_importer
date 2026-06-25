@@ -22,6 +22,46 @@ def connect(config: ImportConfig):
     return psycopg2.connect(config.database_uri())
 
 
+def safe_rollback(connection) -> bool:
+    """Roll back when possible without masking the original database error."""
+
+    if connection is None or getattr(connection, "closed", 1):
+        return False
+    try:
+        connection.rollback()
+        return True
+    except (psycopg2.Error, AttributeError):
+        return False
+
+
+def safe_close(connection) -> None:
+    """Close a connection without failing cleanup on a dead session."""
+
+    if connection is None or getattr(connection, "closed", 1):
+        return
+    try:
+        connection.close()
+    except (psycopg2.Error, AttributeError):
+        pass
+
+
+def is_transient_connection_error(exc: BaseException) -> bool:
+    """Identify PostgreSQL connection failures that are safe to retry."""
+
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, (psycopg2.InterfaceError, psycopg2.OperationalError)):
+            return True
+        if isinstance(current, psycopg2.DatabaseError):
+            code = getattr(current, "pgcode", None)
+            if code and (code.startswith("08") or code in {"57P01", "57P02", "57P03"}):
+                return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 @contextmanager
 def transaction(connection) -> Iterator[Any]:
     """Commit a unit of import work or roll it back on any exception."""
@@ -29,8 +69,8 @@ def transaction(connection) -> Iterator[Any]:
     try:
         yield connection
         connection.commit()
-    except Exception:
-        connection.rollback()
+    except BaseException:
+        safe_rollback(connection)
         raise
 
 
@@ -100,7 +140,7 @@ def test_database(config: ImportConfig, write_test: bool = False) -> dict[str, A
             with connection.cursor() as cursor:
                 cursor.execute("CREATE TEMP TABLE legacy_import_write_test (id integer)")
                 cursor.execute("INSERT INTO legacy_import_write_test VALUES (1)")
-            connection.rollback()
+            safe_rollback(connection)
             write_ok = True
         return {
             "database": database,
@@ -110,4 +150,4 @@ def test_database(config: ImportConfig, write_test: bool = False) -> dict[str, A
             "write_test": write_ok,
         }
     finally:
-        connection.close()
+        safe_close(connection)

@@ -124,7 +124,6 @@ def import_sample(
                     try:
                         existing = fetch_rows(connection, table, sample_id)
                     except Exception:
-                        connection.rollback()
                         raise
                     if existing:
                         results[tool_name] = existing

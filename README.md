@@ -117,6 +117,23 @@ default: committed samples are skipped and failures are reported while later
 samples continue. Use `--no-resume` to stop after the first failure, and
 `--no-progress` for automation or non-interactive logs.
 
+The importer opens a fresh PostgreSQL connection for every sample instead of
+holding one session for the entire CSV. If PostgreSQL drops a connection, the
+current sample is retried up to three times by default with exponential
+backoff. Configure this with:
+
+```bash
+legacy-import import \
+  --csv data_info.csv \
+  --config configs/legacy_import.yaml \
+  --database-retries 5 \
+  --retry-base-seconds 2
+```
+
+Only connection-level failures are retried automatically. Data validation,
+missing-file, extractor, and schema errors are recorded immediately and the
+import proceeds to the next sample while resume mode is enabled.
+
 After each sample, the importer prints the sample name and total elapsed import
 time. This includes local hashing/archive work, GCS uploads, extraction, QC,
 and database writes.
@@ -182,6 +199,9 @@ If the process stops:
 - Fully committed samples remain complete and are skipped on restart.
 - The interrupted sample has its database transaction rolled back. Restarting
   uploads it again to the same deterministic GCS object names and completes it.
+- A dropped PostgreSQL session is closed safely, a new connection is opened,
+  and the interrupted sample is retried. Rollback cleanup never replaces the
+  original error when the connection is already closed.
 - MASH registration is idempotent and safely reuses deterministic IDs.
 - SKA commits in batches and stores its last committed CSV row under
   `.legacy-import-state/`. Restarting continues from that row. The checkpoint
