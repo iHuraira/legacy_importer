@@ -1,6 +1,8 @@
 import psycopg2
 import pytest
+import logging
 
+import legacy_importer.db as db
 from legacy_importer.db import (
     is_transient_connection_error,
     safe_close,
@@ -45,3 +47,63 @@ def test_connection_errors_are_classified_as_transient():
         psycopg2.OperationalError("server closed the connection unexpectedly")
     )
     assert not is_transient_connection_error(ValueError("invalid CSV"))
+
+
+def test_collation_warning_is_reported_once_and_suppressed_on_later_connects(
+    monkeypatch,
+    caplog,
+):
+    db._collation_mismatch_detected = False
+    db._collation_warning_reported = False
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def execute(self, query):
+            calls.append(("execute", query))
+
+    class Connection:
+        def __init__(self, notices):
+            self.notices = notices
+            self.autocommit = False
+
+        def cursor(self):
+            return Cursor()
+
+    connections = [
+        Connection([
+            'WARNING: database "db" has a collation version mismatch\n',
+            "WARNING: unrelated warning\n",
+        ]),
+        Connection([]),
+    ]
+
+    def fake_connect(_uri, **kwargs):
+        calls.append(("connect", kwargs))
+        return connections.pop(0)
+
+    monkeypatch.setattr(db.psycopg2, "connect", fake_connect)
+    config = type("Config", (), {"database_uri": lambda self: "postgresql://db"})()
+    caplog.set_level(logging.WARNING)
+
+    first = db.connect(config)
+    second = db.connect(config)
+
+    assert first.notices == ["WARNING: unrelated warning\n"]
+    assert calls[0] == ("connect", {})
+    assert calls[1] == (
+        "connect",
+        {"options": "-c client_min_messages=error"},
+    )
+    assert ("execute", "SET client_min_messages = warning") in calls
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "collation version mismatch" in record.getMessage()
+    ]
+    assert len(messages) == 1

@@ -6,6 +6,7 @@ import json
 
 from legacy_importer.cli import (
     _append_failure_report,
+    _emit_timing_breakdown,
     _import_one_sample,
     _protect_source_paths,
 )
@@ -101,3 +102,16 @@ def test_sample_import_reconnects_after_transient_database_error(monkeypatch):
     assert report == {"sample": "S1"}
     assert attempts == 2
     assert len([call for call in calls if call[0] == "close"]) == 2
+
+
+def test_timing_breakdown_adds_untracked_overhead(capsys):
+    result = _emit_timing_breakdown(
+        "S1",
+        {"gcs_upload": 6.0, "database_write": 1.0},
+        10.0,
+    )
+
+    output = capsys.readouterr().out
+    assert "gcs_upload: 6.0s" in output
+    assert "database_write: 1.0s" in output
+    assert result["untracked_overhead"] == 3.0

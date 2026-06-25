@@ -16,6 +16,7 @@ from .import_reads import import_reads
 from .import_results import ExtractorError, import_tool_results
 from .manifest import ManifestRow
 from .qc import build_qc1_row, build_qc2_row
+from .timing import PhaseTimer
 
 
 def import_sample(
@@ -27,10 +28,13 @@ def import_sample(
     skip_artifacts: bool = False,
     skip_extractors: bool = False,
     skip_qc: bool = False,
+    timings: PhaseTimer | None = None,
 ) -> dict[str, Any]:
     """Import one sample atomically; uploaded objects remain safe to reuse on retry."""
 
-    inventory = discover_sample(row.full_path, config)
+    timings = timings or PhaseTimer()
+    with timings.measure("input_discovery"):
+        inventory = discover_sample(row.full_path, config)
     if not inventory.sample_dir.is_dir():
         raise FileNotFoundError(row.full_path)
     ownership = ownership_rows(row, config)
@@ -43,35 +47,40 @@ def import_sample(
         or (not skip_artifacts and config.artifacts.get("upload", True))
     )
     if needs_gcs:
-        gcs_client = client_from_config(config)
+        with timings.measure("other"):
+            gcs_client = client_from_config(config)
 
-    with transaction(connection):
-        import_ownership(connection, ownership)
+    with transaction(connection, timings):
+        with timings.measure("database_write"):
+            import_ownership(connection, ownership)
         organization_id = ownership["samples"]["organization_id"]
         reads = {}
         if not skip_reads:
             reads = import_reads(
                 connection, gcs_client, config, row, sample_id, inventory.reads,
                 upload=config.reads.get("upload", True),
+                timings=timings,
             )
             report["reads"] = sorted(reads)
         else:
-            reads = {
-                record["read_type"]: record
-                for record in fetch_rows(connection, "reads", sample_id)
-                if record.get("read_type") in {"R1", "R2"}
-            }
+            with timings.measure("database_query"):
+                reads = {
+                    record["read_type"]: record
+                    for record in fetch_rows(connection, "reads", sample_id)
+                    if record.get("read_type") in {"R1", "R2"}
+                }
 
         results: dict[str, list[dict[str, Any]]] = {}
         for tool_name, tool_config in config.tools.items():
             if tool_name == "export_summary" or not tool_config.enabled:
                 continue
             paths = inventory.tools.get(tool_name, [])
-            gcp_paths = discover_gcp_inputs(
-                inventory.sample_dir,
-                config,
-                tool_name,
-            )
+            with timings.measure("input_discovery"):
+                gcp_paths = discover_gcp_inputs(
+                    inventory.sample_dir,
+                    config,
+                    tool_name,
+                )
             if not paths and not gcp_paths:
                 continue
             if skip_artifacts or not gcp_paths:
@@ -83,7 +92,8 @@ def import_sample(
                     tool_name,
                     datetime.now(timezone.utc),
                 )
-                upsert(connection, "tasks", task, ["task_id"])
+                with timings.measure("database_write"):
+                    upsert(connection, "tasks", task, ["task_id"])
                 artifact = None
                 archive = None
             else:
@@ -91,6 +101,7 @@ def import_sample(
                     connection, gcs_client, config, inventory.sample_dir, run_id,
                     sample_id, organization_id, tool_name, gcp_paths,
                     upload=config.artifacts.get("upload", True),
+                    timings=timings,
                 )
             tool_report = {
                 "artifact_uri": artifact["uri"] if artifact else None,
@@ -101,6 +112,7 @@ def import_sample(
                     parsed = import_tool_results(
                         connection, tool_name, paths, sample_id, task["task_id"], reads,
                         config.tools[tool_name].result_table,
+                        timings=timings,
                     )
                     results[tool_name] = parsed
                     tool_report["results"] = len(parsed)
@@ -122,31 +134,36 @@ def import_sample(
                         "bakta_annotations" if tool_name == "prokka" else tool_name
                     )
                     try:
-                        existing = fetch_rows(connection, table, sample_id)
+                        with timings.measure("database_query"):
+                            existing = fetch_rows(connection, table, sample_id)
                     except Exception:
                         raise
                     if existing:
                         results[tool_name] = existing
             qc1_gate = config.qc.qc1
             if qc1_gate.enabled:
-                qc1_row = build_qc1_row(
-                    sample_id,
-                    qc1_gate.gate_version,
-                    results.get("fastqc", []),
-                    reads,
-                )
-                upsert(connection, "qc1", qc1_row, ["qc1_id"])
+                with timings.measure("qc_verification"):
+                    qc1_row = build_qc1_row(
+                        sample_id,
+                        qc1_gate.gate_version,
+                        results.get("fastqc", []),
+                        reads,
+                    )
+                with timings.measure("database_write"):
+                    upsert(connection, "qc1", qc1_row, ["qc1_id"])
                 report["qc1"] = qc1_row["qc1_decision"]
 
             qc2_gate = config.qc.qc2
             if qc2_gate.enabled:
-                qc2_row = build_qc2_row(
-                    sample_id,
-                    qc2_gate.gate_version,
-                    results.get("bbmap", []),
-                    results.get("quast", []),
-                )
-                upsert(connection, "qc2", qc2_row, ["qc2_id"])
+                with timings.measure("qc_verification"):
+                    qc2_row = build_qc2_row(
+                        sample_id,
+                        qc2_gate.gate_version,
+                        results.get("bbmap", []),
+                        results.get("quast", []),
+                    )
+                with timings.measure("database_write"):
+                    upsert(connection, "qc2", qc2_row, ["qc2_id"])
                 report["qc2"] = qc2_row["qc2_decision"]
 
         summary_config = config.tools.get("export_summary")
@@ -160,12 +177,20 @@ def import_sample(
                     "export_summary",
                     datetime.now(timezone.utc),
                 )
-                upsert(connection, "tasks", summary_task, ["task_id"])
+                with timings.measure("database_write"):
+                    upsert(connection, "tasks", summary_task, ["task_id"])
                 report["tools"]["export_summary"] = {
                     "artifact_uri": None,
                     "results": 0,
                 }
             else:
+                with timings.measure("other"):
+                    summary = build_summary_row(
+                        ownership["samples"],
+                        results,
+                        qc1_row,
+                        qc2_row,
+                    )
                 summary_task, summary_artifact, summary_archive = export_summary_artifact(
                     connection,
                     gcs_client,
@@ -174,17 +199,14 @@ def import_sample(
                     sample_id,
                     organization_id,
                     row.sample_name,
-                    build_summary_row(
-                        ownership["samples"],
-                        results,
-                        qc1_row,
-                        qc2_row,
-                    ),
+                    summary,
                     upload=config.artifacts.get("upload", True),
+                    timings=timings,
                 )
                 report["tools"]["export_summary"] = {
                     "artifact_uri": summary_artifact["uri"],
                     "results": 1,
                 }
                 summary_archive.unlink(missing_ok=True)
+    report["timings"] = timings.as_dict()
     return report

@@ -12,6 +12,7 @@ from .db import upsert
 from .gcs import upload_file
 from .ids import read_id
 from .manifest import ManifestRow
+from .timing import PhaseTimer
 
 
 def raw_read_object_name(config: ImportConfig, row: ManifestRow, filename: str) -> str:
@@ -32,6 +33,7 @@ def import_reads(
     sample_id: UUID,
     reads: dict[str, Path],
     upload: bool = True,
+    timings: PhaseTimer | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Upload raw reads, then idempotently register each row."""
 
@@ -40,21 +42,33 @@ def import_reads(
         identifier = read_id(sample_id, read_type, path.name)
         object_name = raw_read_object_name(config, manifest_row, path.name)
         uri = f"gs://{config.gcp.raw_reads_bucket}/{object_name}"
-        local_checksum = sha256_file(path)
-        metadata = (
-            upload_file(
-                gcs_client,
-                config.gcp.raw_reads_bucket,
-                object_name,
-                path,
-            )
-            if upload
-            else {
+        if timings:
+            with timings.measure("checksum"):
+                local_checksum = sha256_file(path)
+        else:
+            local_checksum = sha256_file(path)
+        if upload:
+            if timings:
+                with timings.measure("gcs_upload"):
+                    metadata = upload_file(
+                        gcs_client,
+                        config.gcp.raw_reads_bucket,
+                        object_name,
+                        path,
+                    )
+            else:
+                metadata = upload_file(
+                    gcs_client,
+                    config.gcp.raw_reads_bucket,
+                    object_name,
+                    path,
+                )
+        else:
+            metadata = {
                 "uri": uri,
                 "size_bytes": path.stat().st_size,
                 "checksum": local_checksum,
             }
-        )
         record = {
             "read_id": identifier,
             "sample_id": sample_id,
@@ -65,6 +79,10 @@ def import_reads(
             "checksum": metadata["checksum"] or local_checksum,
             "status": config.reads.get("status", "imported"),
         }
-        upsert(connection, "reads", record, ["read_id"])
+        if timings:
+            with timings.measure("database_write"):
+                upsert(connection, "reads", record, ["read_id"])
+        else:
+            upsert(connection, "reads", record, ["read_id"])
         imported[read_type] = record
     return imported

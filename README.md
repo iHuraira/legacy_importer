@@ -138,6 +138,32 @@ After each sample, the importer prints the sample name and total elapsed import
 time. This includes local hashing/archive work, GCS uploads, extraction, QC,
 and database writes.
 
+It also prints accumulated non-overlapping phase timings:
+
+```text
+S1: imported in 295.7s (database attempts: 1)
+  timings:
+    archive_creation: 83.4s
+    checksum: 22.6s
+    database_connection: 0.2s
+    database_write: 4.7s
+    extraction: 15.1s
+    gcs_upload: 161.8s
+    input_discovery: 2.1s
+    qc/verification: 2.4s
+    untracked_overhead: 3.4s
+```
+
+Repeated phases across reads and tools are accumulated. The same timing map is
+included in the final JSON report and written as a compact structured logging
+entry.
+
+If PostgreSQL reports a database collation version mismatch, the importer logs
+one administrative warning and suppresses only repeated startup copies on later
+per-sample connections. Normal PostgreSQL warnings are restored immediately
+after connection setup, and database errors remain visible. The importer never
+runs `ALTER DATABASE`; collation refresh remains a database administrator task.
+
 ## Legacy global MASH and SKA
 
 The importer registers the existing merged MASH master and imports the

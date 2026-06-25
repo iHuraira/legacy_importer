@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Iterator
@@ -14,12 +16,60 @@ from psycopg2.extras import Json
 
 from .config import ImportConfig
 from .schema import inspect_schema, table_columns
+from .timing import PhaseTimer
+
+LOG = logging.getLogger(__name__)
+_COLLATION_WARNING = "has a collation version mismatch"
+_collation_mismatch_detected = False
+_collation_warning_reported = False
+_notice_lock = threading.Lock()
+
+
+def _handle_connection_notices(connection) -> None:
+    """Report the collation mismatch once and preserve unrelated notices."""
+
+    global _collation_mismatch_detected, _collation_warning_reported
+    notices = list(getattr(connection, "notices", ()))
+    collation_notices = [
+        notice for notice in notices if _COLLATION_WARNING in notice
+    ]
+    if not collation_notices:
+        return
+    with _notice_lock:
+        _collation_mismatch_detected = True
+        if not _collation_warning_reported:
+            LOG.warning(
+                "PostgreSQL collation version mismatch warning detected; "
+                "suppressing repeated occurrences during import. Ask a DB "
+                "admin to refresh the collation version if appropriate."
+            )
+            _collation_warning_reported = True
+    connection.notices[:] = [
+        notice for notice in notices if _COLLATION_WARNING not in notice
+    ]
 
 
 def connect(config: ImportConfig):
     """Connect using configured environment variable names without logging secrets."""
 
-    return psycopg2.connect(config.database_uri())
+    with _notice_lock:
+        suppress_startup_warning = _collation_mismatch_detected
+    kwargs = (
+        {"options": "-c client_min_messages=error"}
+        if suppress_startup_warning
+        else {}
+    )
+    connection = psycopg2.connect(config.database_uri(), **kwargs)
+    _handle_connection_notices(connection)
+    if suppress_startup_warning:
+        previous_autocommit = connection.autocommit
+        try:
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                cursor.execute("SET client_min_messages = warning")
+        finally:
+            connection.autocommit = previous_autocommit
+    return connection
 
 
 def safe_rollback(connection) -> bool:
@@ -63,12 +113,19 @@ def is_transient_connection_error(exc: BaseException) -> bool:
 
 
 @contextmanager
-def transaction(connection) -> Iterator[Any]:
+def transaction(
+    connection,
+    timings: PhaseTimer | None = None,
+) -> Iterator[Any]:
     """Commit a unit of import work or roll it back on any exception."""
 
     try:
         yield connection
-        connection.commit()
+        if timings:
+            with timings.measure("database_write"):
+                connection.commit()
+        else:
+            connection.commit()
     except BaseException:
         safe_rollback(connection)
         raise

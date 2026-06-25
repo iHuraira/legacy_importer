@@ -35,6 +35,7 @@ from .import_sample import import_sample
 from .logging_config import configure_logging, safe_error
 from .manifest import ManifestRow, read_manifest
 from .schema import inspect_schema
+from .timing import PhaseTimer
 from .verify import verify_sample
 
 app = typer.Typer(no_args_is_help=True, help="Import historical sequencing outputs safely.")
@@ -106,6 +107,39 @@ def _append_failure_report(path: Path, failure: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(failure, default=str) + "\n")
+
+
+def _emit_timing_breakdown(
+    sample_name: str,
+    timings: dict[str, float],
+    total_seconds: float,
+) -> dict[str, float]:
+    """Print and log a readable non-overlapping phase timing breakdown."""
+
+    normalized = dict(timings)
+    measured = sum(normalized.values())
+    overhead = max(0.0, total_seconds - measured)
+    if overhead >= 0.001:
+        normalized["untracked_overhead"] = round(overhead, 3)
+    labels = {
+        "input_discovery": "input_discovery",
+        "archive_creation": "archive_creation",
+        "checksum": "checksum",
+        "gcs_upload": "gcs_upload",
+        "database_connection": "database_connection",
+        "database_query": "database_query",
+        "database_write": "database_write",
+        "extraction": "extraction",
+        "qc_verification": "qc/verification",
+        "retry_backoff": "retry_backoff",
+        "other": "other",
+        "untracked_overhead": "untracked_overhead",
+    }
+    typer.echo("  timings:")
+    for phase, seconds in normalized.items():
+        typer.echo(f"    {labels.get(phase, phase)}: {seconds:.1f}s")
+    LOG.info("Sample %s phase timings: %s", sample_name, normalized)
+    return normalized
 
 
 @app.command("test-db")
@@ -302,11 +336,18 @@ def _import_one_sample(
     """Import one sample using a fresh connection and retry dropped sessions."""
 
     attempts = database_retries + 1
+    timings = PhaseTimer()
     for attempt in range(1, attempts + 1):
         connection = None
         try:
-            connection = connect(settings)
-            if skip_existing and _sample_exists(connection, sample_identifier):
+            with timings.measure("database_connection"):
+                connection = connect(settings)
+            if skip_existing:
+                with timings.measure("database_query"):
+                    exists = _sample_exists(connection, sample_identifier)
+            else:
+                exists = False
+            if exists:
                 return "skipped_existing", {"sample": row.sample_name}, attempt
             report = import_sample(
                 connection,
@@ -316,6 +357,7 @@ def _import_one_sample(
                 skip_artifacts=skip_artifacts,
                 skip_extractors=skip_extractors,
                 skip_qc=skip_qc,
+                timings=timings,
             )
             return "imported", report, attempt
         except Exception as exc:
@@ -331,7 +373,8 @@ def _import_one_sample(
                 attempts,
                 delay,
             )
-            sleep(delay)
+            with timings.measure("retry_backoff"):
+                sleep(delay)
         finally:
             safe_close(connection)
     raise RuntimeError("unreachable")
@@ -401,6 +444,16 @@ def import_command(
                     retry_base_seconds=retry_base_seconds,
                 )
                 elapsed = perf_counter() - started
+                if status == "imported":
+                    typer.echo(
+                        f"{row.sample_name}: imported in {elapsed:.1f}s "
+                        f"(database attempts: {attempts})"
+                    )
+                    report["timings"] = _emit_timing_breakdown(
+                        row.sample_name,
+                        report.get("timings", {}),
+                        elapsed,
+                    )
                 reports.append({
                     "status": status,
                     "elapsed_seconds": round(elapsed, 3),
@@ -411,11 +464,6 @@ def import_command(
                 reporter.close()
                 if status == "skipped_existing":
                     typer.echo(f"{row.sample_name}: skipped existing ({elapsed:.1f}s)")
-                else:
-                    typer.echo(
-                        f"{row.sample_name}: imported in {elapsed:.1f}s "
-                        f"(database attempts: {attempts})"
-                    )
             except Exception as exc:
                 elapsed = perf_counter() - started
                 failure = {

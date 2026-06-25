@@ -12,6 +12,7 @@ from .config import ImportConfig
 from .db import upsert
 from .gcs import upload_file
 from .ids import artifact_id, task_id
+from .timing import PhaseTimer
 
 
 def task_row(
@@ -52,6 +53,7 @@ def import_artifact(
     tool_name: str,
     paths: list[Path],
     upload: bool = True,
+    timings: PhaseTimer | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """Create task, archive and upload outputs, then register the final artifact."""
 
@@ -64,20 +66,45 @@ def import_artifact(
         tool_name,
         now,
     )
-    upsert(connection, "tasks", task, ["task_id"])
+    if timings:
+        with timings.measure("database_write"):
+            upsert(connection, "tasks", task, ["task_id"])
+    else:
+        upsert(connection, "tasks", task, ["task_id"])
     identifier = artifact_id(sample_id, tool_name, "output")
-    archive = create_archive(sample_dir, paths, identifier)
+    if timings:
+        with timings.measure("archive_creation"):
+            archive = create_archive(sample_dir, paths, identifier)
+    else:
+        archive = create_archive(sample_dir, paths, identifier)
     object_name = f"{run_id}/{sample_id}/{task['task_id']}.tar.gz"
-    local_checksum = sha256_file(archive)
-    metadata = (
-        upload_file(gcs_client, config.gcp.artifact_bucket, object_name, archive)
-        if upload
-        else {
+    if timings:
+        with timings.measure("checksum"):
+            local_checksum = sha256_file(archive)
+    else:
+        local_checksum = sha256_file(archive)
+    if upload:
+        if timings:
+            with timings.measure("gcs_upload"):
+                metadata = upload_file(
+                    gcs_client,
+                    config.gcp.artifact_bucket,
+                    object_name,
+                    archive,
+                )
+        else:
+            metadata = upload_file(
+                gcs_client,
+                config.gcp.artifact_bucket,
+                object_name,
+                archive,
+            )
+    else:
+        metadata = {
             "uri": f"gs://{config.gcp.artifact_bucket}/{object_name}",
             "size_bytes": archive.stat().st_size,
             "checksum": local_checksum,
         }
-    )
     artifact = {
         "artifact_id": identifier,
         "task_id": task["task_id"],
@@ -93,5 +120,9 @@ def import_artifact(
         "source": config.source,
     }
     # This write intentionally occurs only after archive creation and successful upload.
-    upsert(connection, "artifacts", artifact, ["artifact_id"])
+    if timings:
+        with timings.measure("database_write"):
+            upsert(connection, "artifacts", artifact, ["artifact_id"])
+    else:
+        upsert(connection, "artifacts", artifact, ["artifact_id"])
     return task, artifact, archive

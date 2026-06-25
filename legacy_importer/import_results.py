@@ -14,6 +14,7 @@ from uuid import UUID
 
 from .db import upsert
 from .ids import result_id
+from .timing import PhaseTimer
 
 
 class ExtractorError(RuntimeError):
@@ -256,6 +257,7 @@ def import_tool_results(
     task_id: UUID,
     reads: dict[str, dict[str, Any]],
     result_table: str | None = None,
+    timings: PhaseTimer | None = None,
 ) -> list[dict[str, Any]]:
     """Run one extractor, enrich every row, and idempotently upsert results."""
 
@@ -264,7 +266,11 @@ def import_tool_results(
     except KeyError as exc:
         raise ExtractorError(f"No bio-extractors adapter is configured for {tool_name}.") from exc
 
-    parsed = parser(paths)
+    if timings:
+        with timings.measure("extraction"):
+            parsed = parser(paths)
+    else:
+        parsed = parser(paths)
     table = result_table or ("bakta_annotations" if tool_name == "prokka" else tool_name)
     primary_key = PRIMARY_KEYS.get(table, f"{table.rstrip('s')}_id")
     now = datetime.now(timezone.utc)
@@ -287,6 +293,10 @@ def import_tool_results(
         if table == "fastqc":
             record["read_id"] = _fastqc_read_id(record, source_path, reads)
             record["read_type"] = _fastqc_read_type(record, source_path)
-        upsert(connection, table, record, [primary_key])
+        if timings:
+            with timings.measure("database_write"):
+                upsert(connection, table, record, [primary_key])
+        else:
+            upsert(connection, table, record, [primary_key])
         enriched.append(record)
     return enriched

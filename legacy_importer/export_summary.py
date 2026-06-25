@@ -10,6 +10,7 @@ from uuid import UUID
 
 from .config import ImportConfig
 from .import_artifacts import import_artifact
+from .timing import PhaseTimer
 
 SUMMARY_FIELDS = [
     "sample_id",
@@ -150,6 +151,7 @@ def export_summary_artifact(
     sample_name: str,
     summary: dict[str, Any],
     upload: bool = True,
+    timings: PhaseTimer | None = None,
 ):
     """Create the export_summary task and upload its generated CSV archive."""
 
@@ -167,4 +169,5 @@ def export_summary_artifact(
             "export_summary",
             [summary_path],
             upload=upload,
+            timings=timings,
         )
