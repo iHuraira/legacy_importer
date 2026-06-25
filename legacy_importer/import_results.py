@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import UUID
 
-from .db import upsert
+from .db import bulk_upsert
 from .ids import result_id
 from .timing import PhaseTimer
 
@@ -293,10 +293,10 @@ def import_tool_results(
         if table == "fastqc":
             record["read_id"] = _fastqc_read_id(record, source_path, reads)
             record["read_type"] = _fastqc_read_type(record, source_path)
-        if timings:
-            with timings.measure("database_write"):
-                upsert(connection, table, record, [primary_key])
-        else:
-            upsert(connection, table, record, [primary_key])
         enriched.append(record)
+    if timings:
+        with timings.measure("database_write"):
+            bulk_upsert(connection, table, enriched, [primary_key])
+    else:
+        bulk_upsert(connection, table, enriched, [primary_key])
     return enriched

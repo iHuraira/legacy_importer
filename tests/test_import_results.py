@@ -7,6 +7,7 @@ import pytest
 
 from legacy_importer.import_results import (
     ExtractorError,
+    import_tool_results,
     parse_amrfinder,
     parse_bbmap,
     parse_bracken,
@@ -14,6 +15,7 @@ from legacy_importer.import_results import (
     parse_mlst,
     parse_prokka,
 )
+from uuid import UUID
 
 
 def install_fake_extractor(monkeypatch, callback):
@@ -129,3 +131,36 @@ def test_database_field_aliases_are_added(tmp_path: Path, monkeypatch):
     assert row["genus"] == "Klebsiella"
     assert row["genus_taxonomy_id"] == 570
     assert row["genus_percent_sum"] == 99.0
+
+
+def test_multirow_results_are_sent_to_one_bulk_upsert(monkeypatch):
+    captured = []
+    monkeypatch.setitem(
+        __import__("legacy_importer.import_results", fromlist=["PARSERS"]).PARSERS,
+        "prokka",
+        lambda _paths: [
+            {"locus_tag": "A", "gene": "a"},
+            {"locus_tag": "B", "gene": "b"},
+        ],
+    )
+    monkeypatch.setattr(
+        "legacy_importer.import_results.bulk_upsert",
+        lambda _connection, table, rows, conflicts: captured.append(
+            (table, rows, conflicts)
+        ),
+    )
+
+    rows = import_tool_results(
+        object(),
+        "prokka",
+        [Path("sample.gff")],
+        UUID("10000000-0000-0000-0000-000000000001"),
+        UUID("20000000-0000-0000-0000-000000000001"),
+        {},
+        "bakta_annotations",
+    )
+
+    assert len(rows) == 2
+    assert len(captured) == 1
+    assert captured[0][0] == "bakta_annotations"
+    assert captured[0][2] == ["bakta_annotation_id"]

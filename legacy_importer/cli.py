@@ -320,6 +320,51 @@ def _sample_exists(connection, sample_id) -> bool:
         return cursor.fetchone() is not None
 
 
+def _load_existing_sample_ids(
+    settings: ImportConfig,
+    sample_ids: list,
+    *,
+    database_retries: int,
+    retry_base_seconds: float,
+    chunk_size: int = 5000,
+) -> set[str]:
+    """Load selected existing sample IDs once to avoid per-skip connections."""
+
+    if not sample_ids:
+        return set()
+    attempts = database_retries + 1
+    for attempt in range(1, attempts + 1):
+        connection = None
+        try:
+            connection = connect(settings)
+            existing: set[str] = set()
+            with connection.cursor() as cursor:
+                for start in range(0, len(sample_ids), chunk_size):
+                    chunk = [str(value) for value in sample_ids[start:start + chunk_size]]
+                    cursor.execute(
+                        "SELECT sample_id FROM samples WHERE sample_id = ANY(%s::uuid[])",
+                        (chunk,),
+                    )
+                    existing.update(str(row[0]) for row in cursor.fetchall())
+            return existing
+        except Exception as exc:
+            safe_rollback(connection)
+            if not is_transient_connection_error(exc) or attempt >= attempts:
+                raise
+            delay = retry_base_seconds * (2 ** (attempt - 1))
+            LOG.warning(
+                "Database connection lost while loading existing samples; "
+                "retrying attempt %d/%d in %.1fs.",
+                attempt + 1,
+                attempts,
+                delay,
+            )
+            sleep(delay)
+        finally:
+            safe_close(connection)
+    raise RuntimeError("unreachable")
+
+
 def _import_one_sample(
     settings: ImportConfig,
     row: ManifestRow,
@@ -418,24 +463,52 @@ def import_command(
     settings = load_config(config)
     rows = _rows(csv_path, organization, sample_name, limit)
     _protect_source_paths(failure_report, rows)
+    sample_identifiers = [
+        ids.sample_id(
+            row.organization_code,
+            row.legacy_batch_code,
+            row.sample_name,
+        )
+        for row in rows
+    ]
+    existing_sample_ids = (
+        _load_existing_sample_ids(
+            settings,
+            sample_identifiers,
+            database_retries=database_retries,
+            retry_base_seconds=retry_base_seconds,
+        )
+        if (skip_existing or resume)
+        else set()
+    )
     reports, failures = [], []
     reporter = _TerminalProgress(progress)
     if rows:
         reporter("Samples: uploading", 0, len(rows))
     try:
-        for row_number, row in enumerate(rows, 1):
+        for row_number, (row, sample_identifier) in enumerate(
+            zip(rows, sample_identifiers),
+            1,
+        ):
             started = perf_counter()
-            sample_identifier = ids.sample_id(
-                row.organization_code,
-                row.legacy_batch_code,
-                row.sample_name,
-            )
+            if str(sample_identifier) in existing_sample_ids:
+                elapsed = perf_counter() - started
+                reports.append({
+                    "sample": row.sample_name,
+                    "status": "skipped_existing",
+                    "elapsed_seconds": round(elapsed, 3),
+                    "database_attempts": 0,
+                })
+                reporter("Samples: uploading", row_number, len(rows))
+                reporter.close()
+                typer.echo(f"{row.sample_name}: skipped existing ({elapsed:.1f}s)")
+                continue
             try:
                 status, report, attempts = _import_one_sample(
                     settings,
                     row,
                     sample_identifier,
-                    skip_existing=(skip_existing or resume),
+                    skip_existing=False,
                     skip_reads=skip_reads,
                     skip_artifacts=skip_artifacts,
                     skip_extractors=skip_extractors,
@@ -445,6 +518,7 @@ def import_command(
                 )
                 elapsed = perf_counter() - started
                 if status == "imported":
+                    existing_sample_ids.add(str(sample_identifier))
                     typer.echo(
                         f"{row.sample_name}: imported in {elapsed:.1f}s "
                         f"(database attempts: {attempts})"

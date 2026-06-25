@@ -134,6 +134,11 @@ Only connection-level failures are retried automatically. Data validation,
 missing-file, extractor, and schema errors are recorded immediately and the
 import proceeds to the next sample while resume mode is enabled.
 
+At startup, resume mode loads the selected existing sample IDs in database
+batches and keeps them in memory. Already-imported samples are therefore skipped
+without opening a new PostgreSQL connection for each one. Fresh per-sample
+connections are created only for samples that need work.
+
 After each sample, the importer prints the sample name and total elapsed import
 time. This includes local hashing/archive work, GCS uploads, extraction, QC,
 and database writes.
@@ -158,11 +163,17 @@ Repeated phases across reads and tools are accumulated. The same timing map is
 included in the final JSON report and written as a compact structured logging
 entry.
 
+Extractor result rows are bulk-upserted in pages of 1,000, and database table
+column metadata is cached for the lifetime of each sample connection. A Prokka
+result with roughly 4,400 annotations therefore uses about five bulk inserts
+instead of thousands of individual inserts and schema queries.
+
 If PostgreSQL reports a database collation version mismatch, the importer logs
-one administrative warning and suppresses only repeated startup copies on later
-per-sample connections. Normal PostgreSQL warnings are restored immediately
-after connection setup, and database errors remain visible. The importer never
-runs `ALTER DATABASE`; collation refresh remains a database administrator task.
+one administrative warning. Connection startup temporarily suppresses server
+warnings, the importer checks the stored and actual collation versions with a
+read-only query, and normal PostgreSQL warnings are immediately restored.
+Database errors remain visible. The importer never runs `ALTER DATABASE`;
+collation refresh remains a database administrator task.
 
 ## Legacy global MASH and SKA
 

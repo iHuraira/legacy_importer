@@ -8,6 +8,7 @@ from legacy_importer.cli import (
     _append_failure_report,
     _emit_timing_breakdown,
     _import_one_sample,
+    _load_existing_sample_ids,
     _protect_source_paths,
 )
 from legacy_importer.config import load_config
@@ -115,3 +116,46 @@ def test_timing_breakdown_adds_untracked_overhead(capsys):
     assert "gcs_upload: 6.0s" in output
     assert "database_write: 1.0s" in output
     assert result["untracked_overhead"] == 3.0
+
+
+def test_existing_samples_are_loaded_in_chunks_with_one_connection(monkeypatch):
+    queried = []
+    closed = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def execute(self, _query, params):
+            queried.append(params[0])
+
+        def fetchall(self):
+            return [(queried[-1][0],)]
+
+    class Connection:
+        closed = 0
+
+        def cursor(self):
+            return Cursor()
+
+    connection = Connection()
+    monkeypatch.setattr("legacy_importer.cli.connect", lambda _settings: connection)
+    monkeypatch.setattr(
+        "legacy_importer.cli.safe_close",
+        lambda value: closed.append(value),
+    )
+
+    existing = _load_existing_sample_ids(
+        load_config("configs/legacy_import.yaml"),
+        ["1", "2", "3"],
+        database_retries=0,
+        retry_base_seconds=0,
+        chunk_size=2,
+    )
+
+    assert queried == [["1", "2"], ["3"]]
+    assert existing == {"1", "3"}
+    assert closed == [connection]

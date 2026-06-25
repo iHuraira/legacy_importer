@@ -4,6 +4,8 @@ import logging
 
 import legacy_importer.db as db
 from legacy_importer.db import (
+    bulk_upsert,
+    cached_table_columns,
     is_transient_connection_error,
     safe_close,
     safe_rollback,
@@ -58,6 +60,9 @@ def test_collation_warning_is_reported_once_and_suppressed_on_later_connects(
     calls = []
 
     class Cursor:
+        def __init__(self, result):
+            self.result = result
+
         def __enter__(self):
             return self
 
@@ -67,20 +72,20 @@ def test_collation_warning_is_reported_once_and_suppressed_on_later_connects(
         def execute(self, query):
             calls.append(("execute", query))
 
+        def fetchone(self):
+            return self.result
+
     class Connection:
-        def __init__(self, notices):
-            self.notices = notices
+        def __init__(self, result):
+            self.result = result
             self.autocommit = False
 
         def cursor(self):
-            return Cursor()
+            return Cursor(self.result)
 
     connections = [
-        Connection([
-            'WARNING: database "db" has a collation version mismatch\n',
-            "WARNING: unrelated warning\n",
-        ]),
-        Connection([]),
+        Connection(("2.36", "2.43")),
+        Connection(("2.36", "2.43")),
     ]
 
     def fake_connect(_uri, **kwargs):
@@ -91,19 +96,98 @@ def test_collation_warning_is_reported_once_and_suppressed_on_later_connects(
     config = type("Config", (), {"database_uri": lambda self: "postgresql://db"})()
     caplog.set_level(logging.WARNING)
 
-    first = db.connect(config)
-    second = db.connect(config)
+    db.connect(config)
+    db.connect(config)
 
-    assert first.notices == ["WARNING: unrelated warning\n"]
-    assert calls[0] == ("connect", {})
-    assert calls[1] == (
+    assert calls[0] == (
         "connect",
         {"options": "-c client_min_messages=error"},
     )
+    assert calls[1] == (
+        "execute",
+        """
+                    SELECT datcollversion,
+                           pg_database_collation_actual_version(oid)
+                    FROM pg_database
+                    WHERE datname = current_database()
+                    """,
+    )
     assert ("execute", "SET client_min_messages = warning") in calls
+    assert [
+        call for call in calls
+        if call == ("connect", {"options": "-c client_min_messages=error"})
+    ] == [
+        ("connect", {"options": "-c client_min_messages=error"}),
+        ("connect", {"options": "-c client_min_messages=error"}),
+    ]
     messages = [
         record.getMessage()
         for record in caplog.records
         if "collation version mismatch" in record.getMessage()
     ]
     assert len(messages) == 1
+
+
+def test_table_columns_are_cached_per_connection(monkeypatch):
+    db._table_columns_cache.clear()
+    connection = object()
+    calls = []
+
+    monkeypatch.setattr(
+        db,
+        "table_columns",
+        lambda _connection, table: calls.append(table) or {"id", "value"},
+    )
+
+    assert cached_table_columns(connection, "results") == {"id", "value"}
+    assert cached_table_columns(connection, "results") == {"id", "value"}
+    assert calls == ["results"]
+
+
+def test_bulk_upsert_uses_one_schema_lookup_and_bounded_values_call(monkeypatch):
+    db._table_columns_cache.clear()
+    captured = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    connection = Connection()
+    schema_calls = []
+    monkeypatch.setattr(
+        db,
+        "table_columns",
+        lambda _connection, table: (
+            schema_calls.append(table) or {"result_id", "sample_id", "value"}
+        ),
+    )
+    monkeypatch.setattr(
+        db,
+        "execute_values",
+        lambda _cursor, _query, values, page_size: captured.append(
+            (values, page_size)
+        ),
+    )
+
+    bulk_upsert(
+        connection,
+        "results",
+        [
+            {"result_id": "1", "sample_id": "S1", "value": 10},
+            {"result_id": "2", "sample_id": "S1", "value": 20},
+        ],
+        ["result_id"],
+        page_size=1000,
+    )
+
+    assert schema_calls == ["results"]
+    assert len(captured) == 1
+    assert captured[0][0] == [("1", "S1", 10), ("2", "S1", 20)]
+    assert captured[0][1] == 1000
