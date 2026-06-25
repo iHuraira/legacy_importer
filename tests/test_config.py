@@ -64,6 +64,7 @@ def test_storage_only_artifact_inputs_are_configured():
     assert not config.tools["mash"].extractor_enabled
     assert not config.tools["ska"].extractor_enabled
     assert not config.tools["export_summary"].extractor_enabled
+    assert config.artifacts.compression_level == 1
 
 
 def test_mash_ska_legacy_inputs_and_columns_are_configured():

@@ -36,3 +36,39 @@ def test_archive_rejects_output_inside_source_data(tmp_path: Path):
     source.write_text("data", encoding="utf-8")
     with pytest.raises(ValueError, match="outside source data"):
         create_archive(sample, [source], "artifact", sample)
+
+
+def test_archive_compression_level_is_configurable_and_reproducible(tmp_path: Path):
+    sample = tmp_path / "sample"
+    sample.mkdir()
+    source = sample / "repeated.txt"
+    source.write_bytes(b"repeated-data-" * 10000)
+
+    fast = create_archive(
+        sample,
+        [source],
+        "fast",
+        tmp_path,
+        compression_level=1,
+    )
+    dense = create_archive(
+        sample,
+        [source],
+        "dense",
+        tmp_path,
+        compression_level=9,
+    )
+
+    with tarfile.open(fast, "r:gz") as handle:
+        assert handle.extractfile("output/repeated.txt").read() == source.read_bytes()
+    assert dense.stat().st_size <= fast.stat().st_size
+
+
+def test_archive_rejects_invalid_compression_level(tmp_path: Path):
+    sample = tmp_path / "sample"
+    sample.mkdir()
+    source = sample / "report.txt"
+    source.write_text("report", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="between 0 and 9"):
+        create_archive(sample, [source], "artifact", tmp_path, compression_level=10)

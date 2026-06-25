@@ -24,6 +24,7 @@ def create_archive(
     inputs: list[Path],
     artifact_id: object,
     temp_dir: str | Path | None = None,
+    compression_level: int = 1,
 ) -> Path:
     """Archive selected files under output/ while preserving relative paths."""
 
@@ -48,9 +49,19 @@ def create_archive(
         ),
     )
 
-    # Set stable metadata so the same inputs produce reproducible archives.
+    if not 0 <= compression_level <= 9:
+        raise ValueError("compression_level must be between 0 and 9")
+
+    # Level 1 favors import speed while retaining standard tar.gz compatibility.
+    # Stable metadata keeps archives reproducible for a fixed compression level.
     with output.open("wb") as raw:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=raw,
+            compresslevel=compression_level,
+            mtime=0,
+        ) as compressed:
             with tarfile.open(fileobj=compressed, mode="w") as archive:
                 for path in resolved:
                     arcname = Path("output") / path.relative_to(root)

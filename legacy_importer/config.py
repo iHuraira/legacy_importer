@@ -56,6 +56,17 @@ class SamplesConfig(BaseModel):
     visibility: Literal["public", "private"] = "private"
 
 
+class ArtifactsConfig(BaseModel):
+    upload: bool = True
+    output_type: str = "tar.gz"
+    compression_level: int = Field(default=1, ge=0, le=9)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        """Keep compatibility with existing dictionary-style configuration use."""
+
+        return getattr(self, name, default)
+
+
 class QCGateConfig(BaseModel):
     enabled: bool = True
     gate_version: str
@@ -123,7 +134,7 @@ class ImportConfig(BaseModel):
     legacy_ownership: dict[str, Any]
     samples: SamplesConfig
     reads: dict[str, Any]
-    artifacts: dict[str, Any]
+    artifacts: ArtifactsConfig
     tasks: dict[str, Any]
     tools: dict[str, ToolConfig]
     qc: QCConfig

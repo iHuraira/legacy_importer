@@ -74,9 +74,19 @@ def import_artifact(
     identifier = artifact_id(sample_id, tool_name, "output")
     if timings:
         with timings.measure("archive_creation"):
-            archive = create_archive(sample_dir, paths, identifier)
+            archive = create_archive(
+                sample_dir,
+                paths,
+                identifier,
+                compression_level=config.artifacts.compression_level,
+            )
     else:
-        archive = create_archive(sample_dir, paths, identifier)
+        archive = create_archive(
+            sample_dir,
+            paths,
+            identifier,
+            compression_level=config.artifacts.compression_level,
+        )
     object_name = f"{run_id}/{sample_id}/{task['task_id']}.tar.gz"
     if timings:
         with timings.measure("checksum"):

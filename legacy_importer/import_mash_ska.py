@@ -462,6 +462,7 @@ def import_mash_master(
         mash_path.parent,
         [mash_path],
         artifact_id,
+        compression_level=config.artifacts.compression_level,
     )
     _progress(progress, "MASH: archived", 2, 5)
     local_checksum = sha256_file(archive)

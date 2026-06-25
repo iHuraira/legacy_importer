@@ -59,6 +59,7 @@ reads:
 artifacts:
   upload: true
   output_type: tar.gz
+  compression_level: 1
 
 tasks:
   state: COMPLETED

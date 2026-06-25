@@ -168,6 +168,19 @@ column metadata is cached for the lifetime of each sample connection. A Prokka
 result with roughly 4,400 annotations therefore uses about five bulk inserts
 instead of thousands of individual inserts and schema queries.
 
+Artifact archives use gzip compression level 1 by default:
+
+```yaml
+artifacts:
+  output_type: tar.gz
+  compression_level: 1
+```
+
+This keeps standard `.tar.gz` compatibility and deterministic output while
+favoring speed over the smaller files produced by gzip level 9. Levels from
+`0` to `9` are accepted. Level `1` is recommended for the migration because
+network upload is already faster than archive compression.
+
 If PostgreSQL reports a database collation version mismatch, the importer logs
 one administrative warning. Connection startup temporarily suppresses server
 warnings, the importer checks the stored and actual collation versions with a
