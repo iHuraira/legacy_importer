@@ -97,7 +97,7 @@ tools:
   fastqc:
     enabled: true
     category: qc
-    parser_inputs: ["fastqc/*_fastqc.zip"]
+    parser_inputs: ["fastqc/*_fastqc.zip", "fastqc/*_fastqc.txt", "fastqc/fastqc_data.txt"]
   bbmap:
     enabled: true
     category: mapping

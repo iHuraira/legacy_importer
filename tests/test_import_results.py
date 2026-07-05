@@ -53,6 +53,20 @@ def test_fastqc_zip_is_unpacked_and_metrics_are_normalized(tmp_path: Path, monke
     assert row["_source_path"] == str(archive_path)
 
 
+def test_fastqc_text_report_is_parsed(tmp_path: Path, monkeypatch):
+    report_path = tmp_path / "S1_R1_fastqc.txt"
+    report_path.write_text("FastQC data", encoding="utf-8")
+
+    def run_extractor(tool, path):
+        return {"filename": Path(path).name, "total_sequences": 100}
+
+    install_fake_extractor(monkeypatch, run_extractor)
+    row = parse_fastqc([report_path])[0]
+
+    assert row["filename"] == "S1_R1_fastqc.txt"
+    assert row["_source_path"] == str(report_path)
+
+
 def test_fastqc_rejects_zip_without_data_file(tmp_path: Path):
     archive_path = tmp_path / "bad_fastqc.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
@@ -164,3 +178,60 @@ def test_multirow_results_are_sent_to_one_bulk_upsert(monkeypatch):
     assert len(captured) == 1
     assert captured[0][0] == "bakta_annotations"
     assert captured[0][2] == ["bakta_annotation_id"]
+
+
+def test_fastqc_results_link_to_txt_reads(monkeypatch):
+    captured = []
+    monkeypatch.setitem(
+        __import__("legacy_importer.import_results", fromlist=["PARSERS"]).PARSERS,
+        "fastqc",
+        lambda _paths: [{
+            "_source_path": "fastqc/S1_R1_fastqc.txt",
+            "total_reads": 100,
+        }],
+    )
+    monkeypatch.setattr(
+        "legacy_importer.import_results.bulk_upsert",
+        lambda _connection, table, rows, conflicts: captured.append(
+            (table, rows, conflicts)
+        ),
+    )
+    read_id = UUID("30000000-0000-0000-0000-000000000001")
+
+    rows = import_tool_results(
+        object(),
+        "fastqc",
+        [Path("fastqc/S1_R1_fastqc.txt")],
+        UUID("10000000-0000-0000-0000-000000000001"),
+        UUID("20000000-0000-0000-0000-000000000001"),
+        {"R1": {"read_id": read_id, "original_filename": "S1_R1.txt"}},
+    )
+
+    assert rows[0]["read_id"] == read_id
+    assert rows[0]["read_type"] == "R1"
+    assert captured[0][0] == "fastqc"
+
+
+def test_fastqc_results_fail_before_database_when_read_is_missing(monkeypatch):
+    monkeypatch.setitem(
+        __import__("legacy_importer.import_results", fromlist=["PARSERS"]).PARSERS,
+        "fastqc",
+        lambda _paths: [{
+            "_source_path": "fastqc/S1_R1_fastqc.txt",
+            "total_reads": 100,
+        }],
+    )
+    monkeypatch.setattr(
+        "legacy_importer.import_results.bulk_upsert",
+        lambda *_args, **_kwargs: pytest.fail("bulk_upsert should not be called"),
+    )
+
+    with pytest.raises(RuntimeError, match="could not be linked"):
+        import_tool_results(
+            object(),
+            "fastqc",
+            [Path("fastqc/S1_R1_fastqc.txt")],
+            UUID("10000000-0000-0000-0000-000000000001"),
+            UUID("20000000-0000-0000-0000-000000000001"),
+            {},
+        )

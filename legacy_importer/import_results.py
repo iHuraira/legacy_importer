@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import tempfile
 import zipfile
 from collections.abc import Iterable
@@ -89,7 +90,7 @@ def _parse_each(
 def _fastqc_data(path: Path) -> Iterator[Path]:
     """Yield fastqc_data.txt directly or safely extract it from a FastQC ZIP."""
 
-    if path.name == "fastqc_data.txt":
+    if path.name == "fastqc_data.txt" or path.suffix.lower() == ".txt":
         yield path
         return
     if path.suffix.lower() != ".zip":
@@ -225,6 +226,60 @@ PRIMARY_KEYS = {
 }
 
 
+def _read_type_from_text(text: str) -> str | None:
+    """Find R1/R2 from common read markers without matching sample numbers."""
+
+    upper = text.upper()
+    for marker, read_type in (("R1", "R1"), ("R2", "R2")):
+        if re.search(rf"(^|[^A-Z0-9]){marker}([^A-Z0-9]|$)", upper):
+            return read_type
+    match = re.search(r"(^|[^A-Z0-9])([12])([^A-Z0-9]|$)", upper)
+    if match:
+        return f"R{match.group(2)}"
+    return None
+
+
+def _sequence_stem(filename: str) -> str:
+    """Normalize FASTQ/FastQC filenames for read-to-report matching."""
+
+    name = filename.lower()
+    for suffix in (
+        ".fastq.gz",
+        ".fq.gz",
+        ".fastq",
+        ".fq",
+        "_fastqc.txt",
+        ".txt",
+        "_fastqc.zip",
+        ".zip",
+    ):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _fastqc_read_type_from_source(
+    row: dict[str, Any],
+    path_hint: str,
+    reads: dict[str, dict[str, Any]],
+) -> str | None:
+    explicit = str(row.get("read_type", "")).upper()
+    if explicit in {"R1", "R2"}:
+        return explicit
+
+    text = " ".join(str(value) for value in row.values())
+    detected = _read_type_from_text(f"{text} {path_hint}")
+    if detected:
+        return detected
+
+    source_name = _sequence_stem(Path(path_hint).name)
+    for read_type, read in reads.items():
+        read_name = str(read.get("original_filename", ""))
+        if source_name and source_name == _sequence_stem(read_name):
+            return read_type
+    return None
+
+
 def _fastqc_read_id(
     row: dict[str, Any],
     path_hint: str,
@@ -232,21 +287,38 @@ def _fastqc_read_id(
 ) -> Any:
     """Resolve an extractor row to R1 or R2 without assuming extractor IDs."""
 
-    text = (" ".join(str(value) for value in row.values()) + " " + path_hint).upper()
-    if "_R1" in text or str(row.get("read_type", "")).upper() == "R1":
-        return reads.get("R1", {}).get("read_id")
-    if "_R2" in text or str(row.get("read_type", "")).upper() == "R2":
-        return reads.get("R2", {}).get("read_id")
-    return None
+    read_type = _fastqc_read_type_from_source(row, path_hint, reads)
+    return reads.get(read_type or "", {}).get("read_id")
 
 
-def _fastqc_read_type(row: dict[str, Any], path_hint: str) -> str | None:
-    text = (" ".join(str(value) for value in row.values()) + " " + path_hint).upper()
-    if "_R1" in text or str(row.get("read_type", "")).upper() == "R1":
-        return "R1"
-    if "_R2" in text or str(row.get("read_type", "")).upper() == "R2":
-        return "R2"
-    return None
+def _fastqc_read_type(
+    row: dict[str, Any],
+    path_hint: str,
+    reads: dict[str, dict[str, Any]],
+) -> str | None:
+    return _fastqc_read_type_from_source(row, path_hint, reads)
+
+
+def _require_fastqc_read_id(
+    record: dict[str, Any],
+    source_path: str,
+    reads: dict[str, dict[str, Any]],
+) -> None:
+    """Fail before hitting the database when a FastQC row cannot map to a read."""
+
+    if record.get("read_id") is not None:
+        return
+    available = {
+        read_type: read.get("original_filename")
+        for read_type, read in sorted(reads.items())
+    }
+    raise RuntimeError(
+        "FastQC result could not be linked to an imported read before database "
+        f"insert. source_path={source_path!r}, read_type={record.get('read_type')!r}, "
+        f"available_reads={available!r}. Check that raw reads were imported and "
+        "that the FastQC ZIP name or extractor fields identify R1/R2."
+    )
+
 
 
 def import_tool_results(
@@ -292,7 +364,8 @@ def import_tool_results(
         record.setdefault("created_at", now)
         if table == "fastqc":
             record["read_id"] = _fastqc_read_id(record, source_path, reads)
-            record["read_type"] = _fastqc_read_type(record, source_path)
+            record["read_type"] = _fastqc_read_type(record, source_path, reads)
+            _require_fastqc_read_id(record, source_path, reads)
         enriched.append(record)
     if timings:
         with timings.measure("database_write"):

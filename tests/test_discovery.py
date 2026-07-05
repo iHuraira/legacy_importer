@@ -29,6 +29,19 @@ def test_discovery_reports_missing_directory(tmp_path: Path):
     assert inventory.missing == ["sample_directory"]
 
 
+def test_discovery_accepts_legacy_txt_reads(tmp_path: Path):
+    root = tmp_path / "S1"
+    (root / "rawdata").mkdir(parents=True)
+    (root / "rawdata" / "S1_R1.txt").write_bytes(b"r1")
+    (root / "rawdata" / "S1_R2.txt").write_bytes(b"r2")
+
+    inventory = discover_sample(root, load_config("configs/legacy_import.yaml"))
+
+    assert inventory.reads["R1"].name == "S1_R1.txt"
+    assert inventory.reads["R2"].name == "S1_R2.txt"
+    assert inventory.missing == []
+
+
 def test_all_prokka_outputs_are_selected_for_gcp_artifact(tmp_path: Path):
     root = tmp_path / "S1"
     prokka = root / "prokka"

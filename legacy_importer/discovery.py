@@ -8,6 +8,15 @@ from pathlib import Path
 from .config import ImportConfig
 
 
+READ_EXTENSIONS = (
+    ".fastq.gz",
+    ".fq.gz",
+    ".fastq",
+    ".fq",
+    ".txt",
+)
+
+
 @dataclass(frozen=True)
 class SampleInventory:
     sample_dir: Path
@@ -39,6 +48,27 @@ def _glob_unique(root: Path, patterns: list[str]) -> list[Path]:
     return sorted(paths, key=lambda path: path.as_posix())
 
 
+def _read_matches(path: Path, read_type: str) -> bool:
+    """Match legacy read filenames by marker and accepted sequence extensions."""
+
+    name = path.name.lower()
+    if not name.endswith(READ_EXTENSIONS):
+        return False
+    marker = read_type.lower()
+    parts = name.replace(".", "_").replace("-", "_").split("_")
+    return marker in parts
+
+
+def _discover_read(rawdata_dir: Path, read_type: str) -> Path | None:
+    matches = sorted(
+        (path for path in rawdata_dir.iterdir() if path.is_file() and _read_matches(path, read_type)),
+        key=lambda path: path.as_posix(),
+    ) if rawdata_dir.is_dir() else []
+    if len(matches) > 1:
+        raise ValueError(f"Multiple {read_type} files found in {rawdata_dir}")
+    return matches[0] if matches else None
+
+
 def discover_gcp_inputs(
     sample_dir: str | Path,
     config: ImportConfig,
@@ -60,11 +90,8 @@ def discover_sample(sample_dir: str | Path, config: ImportConfig) -> SampleInven
 
     reads: dict[str, Path] = {}
     for read_type in ("R1", "R2"):
-        matches = sorted((root / "rawdata").glob(f"*_{read_type}.fastq.gz"))
-        if len(matches) > 1:
-            raise ValueError(f"Multiple {read_type} files found in {root / 'rawdata'}")
-        if matches:
-            reads[read_type] = matches[0]
+        if match := _discover_read(root / "rawdata", read_type):
+            reads[read_type] = match
 
     tools = {
         name: _glob_unique(root, tool.parser_inputs)
