@@ -87,7 +87,11 @@ mash_ska:
     sample2: sample2
     snps: SNPs
     category: null
-  ska_sample_overrides: {}
+  ska_sample_overrides:
+    SH176x65:
+      organization_code: copenhagen
+      legacy_batch_code: 220708_NS500314_AHTFHHAFX3
+      sample_name: SH176x65
   ska_category_thresholds:
     close_max_snps: 20
     related_max_snps: 100
