@@ -57,7 +57,7 @@ DECIMAL_COLUMNS = {
 
 def _optional_text(value: str | None) -> str | None:
     normalized = (value or "").strip()
-    return normalized or None
+    return None if not normalized or normalized.upper() in {"NA", "N/A", "NONE", "NULL"} else normalized
 
 
 def _optional_int(value: str | None, header: str, row_number: int) -> int | None:
