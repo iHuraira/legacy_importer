@@ -49,7 +49,10 @@ CORE_SCHEMA: dict[str, set[str]] = {
     },
 }
 
-RESULT_TABLES = {"fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder", "qc1", "qc2"}
+RESULT_TABLES = {
+    "fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder",
+    "amrfinderplus", "qc1", "qc2",
+}
 
 
 def inspect_schema(connection) -> dict[str, object]:

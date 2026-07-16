@@ -112,6 +112,25 @@ One sample:
 legacy-import import --csv samples.csv --config configs/legacy_import.yaml --sample-name F1S1R3D2B2P3G09
 ```
 
+To populate only the full-fidelity `amrfinderplus` result table from existing
+legacy reports and link each row to its existing `amrfinder` task:
+
+```powershell
+legacy-import import-amrfinderplus `
+  --csv data_info.csv `
+  --config configs/legacy_import.yaml `
+  --dry-run
+
+legacy-import import-amrfinderplus `
+  --csv data_info.csv `
+  --config configs/legacy_import.yaml
+```
+
+The command does not create tasks, samples, reads, artifacts, QC rows, or other
+tool results. It requires exactly one existing `amrfinder` task and one
+`*_amrfinder_report.tsv` for each selected sample. Re-running it safely upserts
+the same deterministic `amrfinderplus_id` values.
+
 Sample imports show an overall upload progress bar. Resume mode is enabled by
 default: committed samples are skipped and failures are reported while later
 samples continue. Use `--no-resume` to stop after the first failure, and

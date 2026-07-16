@@ -34,7 +34,8 @@ def test_schema_reports_missing_column():
         if not (table == "reads" and column == "checksum")
     ]
     rows.extend((table, "sample_id") for table in (
-        "fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder", "qc1", "qc2",
+        "fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder",
+        "amrfinderplus", "qc1", "qc2",
         "bakta_annotations",
     ))
     report = inspect_schema(FakeConnection(rows))
@@ -45,7 +46,8 @@ def test_schema_reports_missing_column():
 def test_schema_accepts_complete_required_shape():
     rows = [(table, column) for table, columns in CORE_SCHEMA.items() for column in columns]
     rows.extend((table, "sample_id") for table in (
-        "fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder", "qc1", "qc2",
+        "fastqc", "mlst", "quast", "bbmap", "bracken", "amrfinder",
+        "amrfinderplus", "qc1", "qc2",
         "bakta_annotations",
     ))
     assert inspect_schema(FakeConnection(rows))["ok"] is True

@@ -222,6 +222,7 @@ PRIMARY_KEYS = {
     "bbmap": "bbmap_id",
     "bracken": "bracken_id",
     "amrfinder": "amrfinder_id",
+    "amrfinderplus": "amrfinderplus_id",
     "bakta_annotations": "bakta_annotation_id",
 }
 

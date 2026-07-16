@@ -31,6 +31,7 @@ from .import_mash_ska import (
     import_ska_distances,
     verify_mash_ska,
 )
+from .import_amrfinderplus import import_amrfinderplus_report
 from .import_sample import import_sample
 from .logging_config import configure_logging, safe_error
 from .manifest import ManifestRow, read_manifest
@@ -559,6 +560,72 @@ def import_command(
     finally:
         reporter.close()
     _print({"imported": reports, "failures": failures})
+    if failures:
+        raise typer.Exit(1)
+
+
+@app.command("import-amrfinderplus")
+def import_amrfinderplus_command(
+    csv_path: Path = typer.Option(..., "--csv", exists=True),
+    config: Path = typer.Option(..., exists=True),
+    limit: int | None = None,
+    organization: str | None = None,
+    sample_name: str | None = None,
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Parse reports and resolve existing tasks without inserting rows.",
+    ),
+) -> None:
+    """Import only complete legacy AMRFinderPlus reports into existing tasks."""
+
+    configure_logging()
+    settings = load_config(config)
+    rows = _rows(csv_path, organization, sample_name, limit)
+    connection = connect(settings)
+    reports: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    try:
+        for row in rows:
+            try:
+                inventory = discover_sample(row.full_path, settings)
+                report_paths = [
+                    path
+                    for path in inventory.tools.get("amrfinder", [])
+                    if path.name.lower().endswith("_amrfinder_report.tsv")
+                ]
+                if len(report_paths) != 1:
+                    raise RuntimeError(
+                        f"Expected exactly one AMRFinderPlus report for "
+                        f"{row.sample_name}; found {len(report_paths)}."
+                    )
+                sample_identifier = ids.sample_id(
+                    row.organization_code,
+                    row.legacy_batch_code,
+                    row.sample_name,
+                )
+                report = import_amrfinderplus_report(
+                    connection,
+                    report_paths[0],
+                    sample_identifier,
+                    dry_run=dry_run,
+                )
+                reports.append({"sample": row.sample_name, **report})
+                typer.echo(
+                    f"{row.sample_name}: {report['status']} "
+                    f"{report['rows']} AMRFinderPlus rows"
+                )
+            except Exception as exc:
+                safe_rollback(connection)
+                failure = {
+                    "sample": row.sample_name,
+                    "error": safe_error(exc),
+                }
+                failures.append(failure)
+                typer.echo(f"{row.sample_name}: failed")
+    finally:
+        safe_close(connection)
+    _print({"results": reports, "failures": failures, "dry_run": dry_run})
     if failures:
         raise typer.Exit(1)
 
